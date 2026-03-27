@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sqlite3
@@ -7,7 +8,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Cookie, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,7 @@ BOT_USERS = {"jarvis", "bolla"}
 
 sessions: dict[str, dict] = {}
 last_active: dict[str, float] = {}
+ws_clients: list[WebSocket] = []
 
 
 def _hash_password(password: str) -> str:
@@ -195,13 +197,25 @@ async def send_message(
     conn.commit()
     conn.close()
 
-    return {
+    msg = {
         "id": msg_id,
         "sender": sender,
         "text": text,
         "timestamp": now,
         "read_by": sender,
     }
+
+    # Broadcast to all WebSocket clients
+    dead = []
+    for ws in ws_clients:
+        try:
+            await ws.send_text(json.dumps({"type": "message", **msg}))
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        ws_clients.remove(ws)
+
+    return msg
 
 
 @app.get("/api/messages")
@@ -250,6 +264,25 @@ async def get_users(
             for name, info in USERS.items()
         ]
     }
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    api_key = websocket.headers.get("X-API-Key") or websocket.query_params.get("api_key")
+    user = _authenticate_bot(api_key)
+    if not user:
+        await websocket.close(code=4001)
+        return
+    await websocket.accept()
+    ws_clients.append(websocket)
+    last_active[user] = time.time()
+    try:
+        while True:
+            await websocket.receive_text()  # keep alive / ping
+            last_active[user] = time.time()
+    except WebSocketDisconnect:
+        if websocket in ws_clients:
+            ws_clients.remove(websocket)
 
 
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
