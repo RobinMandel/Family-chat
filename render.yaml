@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: family-chat
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ROBIN_PASSWORD
+        sync: false
+      - key: PAPA_PASSWORD
+        sync: false
+      - key: JARVIS_API_KEY
+        sync: false
+      - key: BOLLA_API_KEY
+        sync: false
